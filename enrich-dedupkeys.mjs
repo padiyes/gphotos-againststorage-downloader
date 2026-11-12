@@ -4,9 +4,13 @@
 // Run this before the trash phase.
 
 import { writeFileSync, readFileSync } from 'fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const CDP_URL = 'http://127.0.0.1:9222';
-const MANIFEST_FILE = new URL('./manifest.json', import.meta.url).pathname;
+const MANIFEST_FILE = path.join(__dirname, 'manifest.json');
 
 async function getCdpWebSocketUrl() {
   const resp = await fetch(`${CDP_URL}/json`);

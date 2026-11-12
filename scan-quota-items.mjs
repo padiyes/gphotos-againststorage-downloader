@@ -4,10 +4,11 @@
 // Requires Chrome running with --remote-debugging-port=9222, authenticated to Google Photos.
 
 import { writeFileSync, readFileSync, existsSync } from 'fs';
+import { fileURLToPath } from 'url';
 
 const CDP_URL = 'http://127.0.0.1:9222';
-const OUTPUT_FILE = new URL('./quota-items-scan.json', import.meta.url).pathname;
-const MANIFEST_FILE = new URL('./manifest.json', import.meta.url).pathname;
+const OUTPUT_FILE = fileURLToPath(new URL('./quota-items-scan.json', import.meta.url));
+const MANIFEST_FILE = fileURLToPath(new URL('./manifest.json', import.meta.url));
 const PAGE_SIZE = 500;
 const INFO_BATCH_SIZE = 5000;
 

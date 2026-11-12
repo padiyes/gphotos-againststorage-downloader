@@ -1,17 +1,23 @@
 #!/usr/bin/env node
 // Phase 1: Download all quota-consuming items locally.
 // Run this until manifest shows all items downloaded.
-// Safe to re-run — skips already-downloaded items.
+// Safe to re-run - skips already-downloaded items.
 
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { stat } from 'fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const DIR = path.dirname(fileURLToPath(import.meta.url));
 
 const CDP_URL = 'http://127.0.0.1:9222';
-const MANIFEST_FILE = new URL('./manifest.json', import.meta.url).pathname;
-const DOWNLOADS_DIR = new URL('./downloads/', import.meta.url).pathname;
-const DELAY_MS = 500; // delay between downloads to avoid rate limits
+const MANIFEST_FILE = path.join(DIR, 'manifest.json');
+const DOWNLOADS_DIR = path.join(DIR, 'downloads') + path.sep;
+const DELAY_MS = 500;
 
-if (!existsSync(DOWNLOADS_DIR)) mkdirSync(DOWNLOADS_DIR, { recursive: true });
+if (!existsSync(DOWNLOADS_DIR)) {
+  mkdirSync(DOWNLOADS_DIR, { recursive: true });
+}
 
 async function getCdpWebSocketUrl() {
   const resp = await fetch(`${CDP_URL}/json`);
