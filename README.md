@@ -1,150 +1,236 @@
-# gphotos-storage-recovery
+Google Photos Storage Recovery
 
-Reclaim Google Photos storage quota by identifying quota-consuming items, downloading them, trashing from cloud, and re-uploading via a Pixel 1's grandfathered unlimited-original-quality backup.
+A Node.js toolkit for scanning, downloading, verifying, and managing Google Photos items that consume Google Account storage quota.
 
-## How it works
+The project uses Chrome DevTools Protocol (CDP) to interact with an authenticated Google Photos session.
 
-Google Photos counts Original quality uploads (any date) and Storage Saver uploads (after June 1, 2021) toward your 15 GB quota. Pixel 1 (2016) has a permanent exemption: anything it uploads at Original quality costs zero quota.
+Project Overview
 
-This pipeline exploits that by:
+This repository contains tools for:
 
-1. **Scanning** the full library via undocumented `batchexecute` RPCs to find quota-consuming items
-2. **Downloading** those items locally (preserving EXIF metadata)
-3. **Trashing** them from Google Photos (removes quota charge)
-4. **Pushing** the files to a Pixel 1 via ADB
-5. **Letting Google Photos on the Pixel back them up** as "new" uploads (zero quota cost)
+Scanning Google Photos for quota-consuming media.
+Downloading original media files locally.
+Verifying downloaded files against the manifest.
+Enriching media entries with Google Photos deduplication keys.
+Moving downloaded items to Google Photos Trash without re-uploading.
+Tracking progress and checking storage status.
 
-The result: identical photos/videos in your library, same metadata, but marked "doesn't take up space."
+Important: The current recovery workflow uses the trash-only method. It does not require a Pixel 1 device, ADB, or re-uploading files.
 
-## Prerequisites
+Requirements
+Node.js 22 or compatible version.
+npm.
+Google Chrome.
+Google Photos account authenticated in Chrome.
+Chrome remote debugging enabled on port 9222.
+Sufficient local disk space for downloaded media.
 
-- **Pixel 1** (sailfish) with Google Photos configured for Original quality backup
-  - Grandfathered unlimited uploads must still be active (check in Photos → Settings → Backup → Quality)
-  - USB debugging enabled, ADB authorized
-- **Chrome** running with `--remote-debugging-port=9222`, signed into Google Photos
-- **Node.js 18+**
-- **ADB** installed and in PATH
+Install dependencies:
 
-## Setup
-
-```bash
-git clone https://github.com/nbarari/gphotos-storage-recovery.git
-cd gphotos-storage-recovery
+powershell
 npm install
-```
 
-Start Chrome with CDP enabled:
 
-```bash
-google-chrome --remote-debugging-port=9222 \
-  --user-data-dir="$(pwd)/.browser-profile"
-```
+Start Chrome with remote debugging enabled:
 
-Navigate to https://photos.google.com and sign in.
+powershell
+chrome.exe --remote-debugging-port=9222
 
-## Pipeline
 
-Run scripts in order. Each is idempotent and safe to re-run.
+If Chrome is installed in a different location, use its full executable path.
 
-### 1. Scan for quota-consuming items
+Open Google Photos:
 
-```bash
-npm run scan
-```
+https://photos.google.com/
 
-Enumerates the full library via `lcxiM` RPC (500 items/page), then batch-checks quota status via `EWgK9e` (5000 items/call). Outputs `manifest.json` with all quota-consuming items.
+Make sure the account is authenticated before running the scripts.
 
-### 2. Download all quota items
+Security: Do not expose Chrome's remote debugging port to public networks. It can provide access to the authenticated browser session.
 
-```bash
-npm run download
-```
+Project Scripts
+Script	Purpose
+scan-quota-items.mjs	Scan Google Photos for quota-consuming items
+batch-download.mjs	Download media files locally
+verify-downloads.mjs	Verify local downloaded files
+enrich-dedupkeys.mjs	Add deduplication keys to manifest entries
+batch-trash-only.mjs	Move eligible downloaded items to Trash
+batch-trash-reupload.mjs	Legacy trash and re-upload workflow
+verify-reupload.mjs	Verify legacy re-upload workflow
+check-quota-status.mjs	Check Google Photos storage status
+Recovery Workflow
+1. Scan Google Photos
+powershell
+node .\scan-quota-items.mjs
 
-Fetches signed download URLs via `pLFTfd` RPC and downloads with session cookies. Saves to `./downloads/` with collision-safe filenames. Skips already-downloaded items.
 
-### 3. Enrich manifest with dedupKeys
+This generates:
 
-```bash
-npm run enrich
-```
+quota-items-scan.json
+manifest.json (when the manifest does not already exist, or updates an existing manifest)
 
-The trash RPC (`XwAOJf`) requires `dedupKey`, not `mediaKey`. This script enumerates the library to map mediaKey to dedupKey.
+The manifest contains media identifiers, filenames, sizes, timestamps, and quota-related metadata.
 
-**Note:** `lcxiM` last parameter controls mode: `1` = library, `2` = archive. If items remain unmatched, they may be in the archive. Edit the script to change the mode parameter.
+2. Download quota-consuming media
+powershell
+node .\batch-download.mjs
 
-### 4. Trash + push to Pixel
 
-```bash
-npm run trash-reupload
-```
+Downloaded files are stored in:
 
-Safety gates:
-- Refuses to run unless ALL items are downloaded locally
-- Verifies local files still exist on disk
+text
+downloads/
 
-Processes in batches of 10: trash via `XwAOJf`, ADB push to `/sdcard/DCIM/Camera/`, MediaStore content insert, then restarts Google Photos to trigger backup.
 
-### 5. Verify quota recovery
+The script:
 
-```bash
-npm run verify
-```
+Downloads media using the authenticated Chrome session.
+Avoids downloading entries already marked as downloaded.
+Tracks download status in manifest.json.
+Saves progress periodically.
+Supports resuming interrupted downloads.
+3. Verify downloaded files
+powershell
+node .\verify-downloads.mjs
 
-After the Pixel finishes backing up (1-4 hours), this scans the library and confirms re-uploaded items show `takesUpSpace=false` and `isOriginalQuality=true`.
 
-### 6. Clean up Pixel storage
+The verification process checks:
 
-After verification, remove files from the Pixel:
+Downloaded file existence.
+File sizes.
+File validity.
+Missing or incomplete downloads.
 
-```bash
-adb shell rm /sdcard/DCIM/Camera/*
-```
+Only entries with downloaded files physically present on disk should be eligible for the trash-only workflow.
 
-## Utilities
+4. Enrich deduplication keys
+powershell
+node .\enrich-dedupkeys.mjs
 
-```bash
-# Check quota status of a single item
-node check-quota-status.mjs <mediaKey>
 
-# Download a single item (for testing)
-node download-test.mjs <mediaKey> <outputFilename>
-```
+This enumerates the Google Photos library and matches media identifiers with their corresponding deduplication keys.
 
-## One-time Pixel setup
+The deduplication keys are required by the trash operation.
 
-Google Photos caches which files it has previously backed up. If the device ever saw these files before, clear the app data:
+5. Run trash-only dry-run
+powershell
+node .\batch-trash-only.mjs
 
-```bash
-adb shell pm clear com.google.android.apps.photos
-```
 
-Then sign back into Google Photos on the Pixel and configure:
-- Backup: On
-- Quality: Original quality
-- Folders to back up: DCIM/Camera
+The default mode is DRY-RUN.
 
-## Critical constraints
+It does not modify Google Photos.
 
-- **Delete-first required.** Google Photos uses perceptual hash deduplication. Re-uploading without deleting first does NOT reclaim quota — the upload is silently deduplicated and inherits the old quota status.
-- **`XwAOJf` uses dedupKey, not mediaKey.** The trash RPC takes a different identifier than what `EWgK9e` returns. Run the enrichment step first.
-- **Archive items need mode 2.** Items in the Google Photos archive won't appear in library enumeration (mode 1). Use `lcxiM` with mode parameter `2` to find them.
-- **In-page fetch is CORS-blocked.** Download URLs from `pLFTfd` must be fetched from Node.js with session cookies, not from within the page context.
+Before proceeding, inspect:
 
-## RPCs used
+Total manifest entries.
+Already trashed items.
+Eligible downloaded items.
+Skipped entries.
+Unique deduplication keys.
 
-| RPC | Purpose | Request format |
-|-----|---------|----------------|
-| `lcxiM` | Library/archive enumeration (500/page) | `[pageToken, null, pageSize, null, 1, mode]` (mode: 1=library, 2=archive) |
-| `EWgK9e` | Batch quota check (5000/call) | `[[[mappedKeys], [fieldMask]]]` |
-| `pLFTfd` | Download URL (signed, short-lived) | `[["mediaKey"], [1]]` |
-| `XwAOJf` | Move to trash | `[null, 1, ["dedupKey"], 3]` |
+The script excludes entries that:
 
-All RPCs use the `batchexecute` endpoint at `/_/PhotosUi/data/batchexecute`. Authentication uses XSRF tokens and session ID from `window.WIZ_global_data` (runs inside an authenticated browser session via CDP).
+Were not downloaded.
+Have no local file.
+Have no deduplication key.
+Have already been marked as trashed.
+Are explicitly excluded as manually trashed items.
+6. Execute trash-only operation
+powershell
+node .\batch-trash-only.mjs --execute
 
-## Acknowledgments
 
-RPC discovery informed by [xob0t/Google-Photos-Toolkit](https://github.com/xob0t/Google-Photos-Toolkit) (Tampermonkey userscript) and [xob0t/google_photos_web_client](https://github.com/xob0t/google_photos_web_client) (Python library).
+This operation:
 
-## License
+Sends the trash request for each eligible item.
+Does not upload or re-upload any files.
+Does not use ADB.
+Saves progress in manifest.json.
+Records successful RPC responses.
+Continues past individual errors.
+
+The manifest records:
+
+trashed
+trashedAt
+trashMethod
+
+Important: An accepted RPC response is not independent confirmation that the media is visible in Trash. Always inspect Google Photos Trash in Chrome after execution.
+
+7. Check storage status
+powershell
+npm run check
+
+
+Allow Google Photos storage accounting time to update.
+
+Compare the storage status before and after the operation.
+
+Current Recovery Results
+
+The latest recorded run:
+
+Metric	Result
+Total quota-consuming items	1,211
+Downloaded files	1,210
+Missing downloads	1
+Manually trashed	1
+Trash RPC accepted	1,209
+Errors / unconfirmed	0
+Total marked trashed	1,209
+
+The remaining undownloaded item was excluded from the trash operation.
+
+The 1,210 locally downloaded files remain available in the downloads/ directory.
+
+Important Safety Notes
+Keep the downloads/ directory until recovery has been fully verified.
+Keep a backup of manifest.json.
+Do not delete local files immediately after moving items to Trash.
+Do not empty Google Photos Trash until you are certain that the local backups are valid and complete.
+Check Google Photos Trash manually after execution.
+Remember that items in Trash may remain recoverable for a limited retention period.
+Do not run the legacy batch-trash-reupload.mjs script when using the trash-only workflow.
+Never assume that an HTTP success response guarantees storage quota has already been recovered.
+Important Files
+text
+.
+├── downloads/
+├── manifest.json
+├── quota-items-scan.json
+├── scan-quota-items.mjs
+├── batch-download.mjs
+├── verify-downloads.mjs
+├── enrich-dedupkeys.mjs
+├── batch-trash-only.mjs
+├── batch-trash-reupload.mjs
+├── verify-reupload.mjs
+├── check-quota-status.mjs
+├── package.json
+└── README.md
+
+
+Generated data files and downloaded media should be backed up separately from the source code.
+
+Windows PowerShell Notes
+
+If PowerShell blocks npm.ps1 due to execution policy, use:
+
+powershell
+npm.cmd install
+npm.cmd run download
+npm.cmd run scan
+npm.cmd run check
+
+
+Node scripts can be executed directly:
+
+powershell
+node .\scan-quota-items.mjs
+node .\batch-download.mjs
+node .\enrich-dedupkeys.mjs
+node .\batch-trash-only.mjs
+
+License
 
 MIT
